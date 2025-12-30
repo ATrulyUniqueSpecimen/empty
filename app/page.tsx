@@ -13,13 +13,15 @@ type Mode = "menu" | "game";
 export default function Page() {
   type Mode = "menu" | "stats" | "game";
 
-  const [uiCoins, setUiCoins] = useState<number>(0);
+  const [uiCoins, setUiCoins] = useState(0);
+  const [uiEquippedWeapon, setUiEquippedWeapon] = useState("none");
+  const [uiEquippedArmor, setUiEquippedArmor] = useState("none");
   const [uiInventory, setUiInventory] = useState<string[]>([]);
 
   const [mode, setMode] = useState<Mode>("menu");
   const [pendingSlot, setPendingSlot] = useState<number | null>(null);
 
-  const [stats, setStats] = useState({ STR: 5, CHA: 5, WIT: 5 });
+  const [stats, setStats] = useState({ STR_BASE: 5, CHA_BASE: 5, WIT_BASE: 5 });
   const STAT_POOL = 15; // example, change as you like
 
   const [storyJson, setStoryJson] = useState<any | null>(null);
@@ -78,15 +80,15 @@ export default function Page() {
     syncSidebar(s);
   }
 
-  function startFreshInSlot(slot: number, chosenStats: { STR: number; CHA: number; WIT: number }) {
+  function startFreshInSlot(slot: number, chosenStats: { STR_BASE: number; CHA_BASE: number; WIT_BASE: number }) {
     if (!storyJson) return;
 
     const s = new Story(storyJson);
 
     // Set Ink globals before any Continue()
-    s.variablesState["STR"] = chosenStats.STR;
-    s.variablesState["CHA"] = chosenStats.CHA;
-    s.variablesState["WIT"] = chosenStats.WIT;
+    s.variablesState["STR_BASE"] = chosenStats.STR_BASE;
+    s.variablesState["CHA_BASE"] = chosenStats.CHA_BASE;
+    s.variablesState["WIT_BASE"] = chosenStats.WIT_BASE;
 
     setStory(s);
     setActiveSlot(slot);
@@ -105,25 +107,31 @@ export default function Page() {
     setStats,
     pool,
   }: {
-    stats: { STR: number; CHA: number; WIT: number };
-    setStats: (s: { STR: number; CHA: number; WIT: number }) => void;
+    stats: { STR_BASE: number; CHA_BASE: number; WIT_BASE: number };
+    setStats: (s: { STR_BASE: number; CHA_BASE: number; WIT_BASE: number }) => void;
     pool: number;
   }) {
-    const total = stats.STR + stats.CHA + stats.WIT;
+    const total = stats.STR_BASE + stats.CHA_BASE + stats.WIT_BASE;
     const remaining = pool - total;
 
-    function setOne(k: "STR" | "CHA" | "WIT", v: number) {
+    function setOne(k: "STR_BASE" | "CHA_BASE" | "WIT_BASE", v: number) {
       const clamped = Math.max(0, Math.min(20, v));
       setStats({ ...stats, [k]: clamped });
     }
+
+    const LABELS: Record<string, string> = {
+      STR_BASE: "STR",
+      CHA_BASE: "CHA",
+      WIT_BASE: "INT",
+    };
 
     return (
       <div style={{ display: "grid", gap: 12, marginTop: 16 }}>
         <div style={{ opacity: 0.85 }}>Remaining: {remaining}</div>
 
-        {(["STR", "CHA", "WIT"] as const).map(k => (
+        {(["STR_BASE", "CHA_BASE", "WIT_BASE"] as const).map(k => (
           <div key={k} style={{ display: "flex", gap: 10, alignItems: "center" }}>
-            <div style={{ width: 50, fontWeight: 700 }}>{k}</div>
+            <div style={{ width: 50, fontWeight: 700 }}>{LABELS[k]}</div>
             <button onClick={() => setOne(k, stats[k] - 1)} disabled={stats[k] <= 0}>-</button>
             <div style={{ width: 30, textAlign: "center" }}>{stats[k]}</div>
             <button
@@ -140,7 +148,7 @@ export default function Page() {
 
   function beginNewGame(slot: number) {
     setPendingSlot(slot);
-    setStats({ STR: 5, CHA: 5, WIT: 5 }); // defaults
+    setStats({ STR_BASE: 5, CHA_BASE: 5, WIT_BASE: 5 }); // defaults
     setMode("stats");
   }
 
@@ -190,19 +198,45 @@ export default function Page() {
     refreshSlotPresence();
   }
 
+  function asNumber(v: any, fallback = 0) {
+    if (typeof v === "number") return v;
+    const n = parseInt(String(v ?? ""), 10);
+    return Number.isFinite(n) ? n : fallback;
+  }
+
+  function asString(v: any, fallback = "none") {
+    if (typeof v === "string") return v;
+    if (v == null) return fallback;
+    return String(v);
+  }
+
   function syncSidebar(s: Story) {
-    const coinsRaw = s.variablesState["coins"];
-    const coins = typeof coinsRaw === "number" ? coinsRaw : parseInt(String(coinsRaw ?? "0"), 10) || 0;
-    setUiCoins(coins);
+    setUiCoins(asNumber((s as any).variablesState["coins"], 0));
+
+    const eqW = asString((s as any).variablesState["eq_weapon"], "none");
+    const eqA = asString((s as any).variablesState["eq_armor"], "none");
+    setUiEquippedWeapon(eqW);
+    setUiEquippedArmor(eqA);
 
     const items: string[] = [];
 
-    if (s.variablesState["inv_rusty_sword"]) items.push("Rusty Sword");
-    if (s.variablesState["inv_old_sack"]) items.push("Old Sack");
-
-    // Add more flags here as you add items in Ink.
-
+    //ALL INVENTORY ITEMS MUST BE HERE
+    if ((s as any).variablesState["inv_rusty_sword"]) items.push("Rusty Sword");
+    if ((s as any).variablesState["inv_leather_armor"]) items.push("Leather Armor");
+    if ((s as any).variablesState["inv_old_sack"]) items.push("Old Sack");
+    
     setUiInventory(items);
+  }
+
+  const ITEM_NAMES: Record<string, string> = {
+    //ALL EQUIPPABLE ITEMS MUST BE HERE
+    none: "None",
+    rusty_sword: "Rusty Sword",
+    leather_armor: "Leather Armor",
+  };
+
+  function pretty(id: string) {
+    return ITEM_NAMES[id] ?? id;
   }
 
   useEffect(() => {
@@ -303,7 +337,7 @@ export default function Page() {
             <button onClick={() => { setMode("menu"); setPendingSlot(null); }}>
               Back
             </button>
-            <button onClick={confirmStats} disabled={stats.STR + stats.CHA + stats.WIT !== STAT_POOL}>
+            <button onClick={confirmStats} disabled={stats.STR_BASE + stats.CHA_BASE + stats.WIT_BASE !== STAT_POOL}>
               Confirm
             </button>
           </div>
@@ -340,7 +374,7 @@ export default function Page() {
             {/* Right: sidebar */}
             <aside
               style={{
-                width: 240,
+                width: 260,
                 border: "1px solid rgba(255,255,255,0.15)",
                 borderRadius: 10,
                 padding: 12,
@@ -348,23 +382,31 @@ export default function Page() {
                 top: 20,
               }}
             >
-              <div style={{ fontWeight: 800, marginBottom: 8 }}>Inventory</div>
+              <div style={{ fontWeight: 800, marginBottom: 10 }}>Save {activeSlot + 1}</div>
 
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ opacity: 0.8, fontSize: 14 }}>Coins</div>
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ opacity: 0.75, fontSize: 13 }}>Coins</div>
                 <div style={{ fontSize: 18, fontWeight: 700 }}>{uiCoins}</div>
               </div>
 
-              <div style={{ opacity: 0.8, fontSize: 14, marginBottom: 6 }}>Items</div>
-              {uiInventory.length === 0 ? (
-                <div style={{ opacity: 0.7, fontSize: 14 }}>Empty</div>
-              ) : (
-                <ul style={{ margin: 0, paddingLeft: 18 }}>
-                  {uiInventory.map(item => (
-                    <li key={item}>{item}</li>
-                  ))}
-                </ul>
-              )}
+              <div style={{ marginBottom: 12 }}>
+                <div style={{ opacity: 0.75, fontSize: 13, marginBottom: 4 }}>Equipped</div>
+                <div style={{ fontSize: 14 }}>Weapon: {pretty(uiEquippedWeapon)}</div>
+                <div style={{ fontSize: 14 }}>Armor: {pretty(uiEquippedArmor)}</div>
+              </div>
+
+              <div>
+                <div style={{ opacity: 0.75, fontSize: 13, marginBottom: 6 }}>Inventory</div>
+                {uiInventory.length === 0 ? (
+                  <div style={{ opacity: 0.7, fontSize: 14 }}>Empty</div>
+                ) : (
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {uiInventory.map(item => (
+                      <li key={item}>{item}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
             </aside>
           </div>
         </div>
