@@ -8,26 +8,32 @@ const ACTIVE_SLOT_KEY = "ink_active_slot";
 
 type ChoiceView = { index: number; text: string };
 
+type Mode = "menu" | "game";
+
 export default function Page() {
+  const [mode, setMode] = useState<Mode>("menu");
+
+  const [storyJson, setStoryJson] = useState<any | null>(null);
   const [story, setStory] = useState<Story | null>(null);
+
   const [lines, setLines] = useState<string[]>([]);
   const [choices, setChoices] = useState<ChoiceView[]>([]);
-  const [activeSlot, setActiveSlot] = useState<number>(0); // 0..2
 
-  function getSlotIndexFromStorage(): number {
-    const raw = localStorage.getItem(ACTIVE_SLOT_KEY);
-    const n = raw ? parseInt(raw, 10) : 0;
-    if (Number.isFinite(n) && n >= 0 && n <= 2) return n;
-    return 0;
+  const [activeSlot, setActiveSlot] = useState<number>(0);
+  const [slotHasSave, setSlotHasSave] = useState<boolean[]>([false, false, false]);
+
+  function readSlotPresence(): boolean[] {
+    return SAVE_KEYS.map(k => !!localStorage.getItem(k));
   }
 
-  function setActiveSlotPersisted(slot: number) {
-    localStorage.setItem(ACTIVE_SLOT_KEY, String(slot));
-    setActiveSlot(slot);
+  function refreshSlotPresence() {
+    setSlotHasSave(readSlotPresence());
   }
 
   function saveToSlot(s: Story, slot: number) {
     localStorage.setItem(SAVE_KEYS[slot], s.state.toJson());
+    localStorage.setItem(ACTIVE_SLOT_KEY, String(slot));
+    refreshSlotPresence();
   }
 
   function loadFromSlot(s: Story, slot: number): boolean {
@@ -37,19 +43,18 @@ export default function Page() {
       s.state.LoadJson(saved);
       return true;
     } catch {
-      // Corrupt save. Trash it.
       localStorage.removeItem(SAVE_KEYS[slot]);
+      refreshSlotPresence();
       return false;
     }
   }
 
   function clearSlot(slot: number) {
     localStorage.removeItem(SAVE_KEYS[slot]);
+    refreshSlotPresence();
   }
 
-  function refreshUI(s: Story, resetTranscript: boolean) {
-    // Rebuild transcript from the story's output since the last choice.
-    // If resetTranscript is true, we throw away the old transcript.
+  function buildUIFromStory(s: Story, resetTranscript: boolean) {
     const newLines: string[] = [];
     while (s.canContinue) {
       const t = (s as any).Continue().trim();
@@ -62,86 +67,166 @@ export default function Page() {
     setChoices(s.currentChoices.map(c => ({ index: c.index, text: c.text })));
   }
 
-  async function boot(slotToUse?: number) {
-    const res = await fetch("/story.json");
-    const json = await res.json();
-    const s = new Story(json);
+  function startFreshInSlot(slot: number) {
+    if (!storyJson) return;
 
-    const slot = slotToUse ?? getSlotIndexFromStorage();
-    setActiveSlotPersisted(slot);
-
-    const loaded = loadFromSlot(s, slot);
-
+    const s = new Story(storyJson);
     setStory(s);
+    setActiveSlot(slot);
 
-    // Important: If we loaded a save, rebuild transcript fresh from that state.
-    // If we didn't, just start from the beginning.
-    refreshUI(s, true);
+    setLines([]);
+    setChoices([]);
 
-    // If a save existed, we also immediately re-save, so any format upgrades
-    // (or minor normalization) get persisted.
-    if (loaded) saveToSlot(s, slot);
+    buildUIFromStory(s, true);
+    saveToSlot(s, slot);
+
+    setMode("game");
   }
 
-  useEffect(() => {
-    boot();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  function loadSlot(slot: number) {
+    if (!storyJson) return;
+
+    const s = new Story(storyJson);
+    const ok = loadFromSlot(s, slot);
+
+    if (!ok) {
+      // If there is no save or it is corrupt, do nothing.
+      return;
+    }
+
+    setStory(s);
+    setActiveSlot(slot);
+
+    setLines([]);
+    setChoices([]);
+
+    buildUIFromStory(s, true);
+
+    // Normalize by resaving immediately.
+    saveToSlot(s, slot);
+
+    setMode("game");
+  }
 
   function choose(i: number) {
     if (!story) return;
     story.ChooseChoiceIndex(i);
-    refreshUI(story, false);
+    buildUIFromStory(story, false);
     saveToSlot(story, activeSlot);
   }
 
-  function switchSlot(slot: number) {
-    if (slot === activeSlot) return;
-    // Boot a fresh Story instance and load that slot into it.
-    boot(slot);
+  function backToMenu() {
+    setMode("menu");
+    setStory(null);
+    setLines([]);
+    setChoices([]);
+    refreshSlotPresence();
   }
 
-  function newGameInSlot(slot: number) {
-    clearSlot(slot);
-    // If you reset the active slot, restart immediately.
-    if (slot === activeSlot) boot(slot);
-  }
+  useEffect(() => {
+    // Load story.json once on page load.
+    (async () => {
+      const res = await fetch("/story.json");
+      const json = await res.json();
+      setStoryJson(json);
 
-  function slotLabel(slot: number) {
-    const hasSave = typeof window !== "undefined" && localStorage.getItem(SAVE_KEYS[slot]);
-    return `Save ${slot + 1}${hasSave ? "" : " (empty)"}`;
-  }
+      // Update save presence after localStorage is available.
+      refreshSlotPresence();
+
+      // Optional: keep last active slot highlighted in the menu.
+      const raw = localStorage.getItem(ACTIVE_SLOT_KEY);
+      const n = raw ? parseInt(raw, 10) : 0;
+      if (Number.isFinite(n) && n >= 0 && n <= 2) setActiveSlot(n);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <main style={{ maxWidth: 720, margin: "40px auto", padding: 16 }}>
-      <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
-        {[0, 1, 2].map(slot => (
-          <div key={slot} style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            <button
-              onClick={() => switchSlot(slot)}
-              disabled={slot === activeSlot}
-              style={{ minWidth: 140 }}
-            >
-              {slotLabel(slot)}
-            </button>
-            <button onClick={() => newGameInSlot(slot)}>New</button>
+      {mode === "menu" && (
+        <div>
+          <h1 style={{ marginBottom: 8 }}>Text RPG</h1>
+          <p style={{ marginTop: 0, opacity: 0.8 }}>
+            Choose a save slot.
+          </p>
+
+          <div style={{ display: "grid", gap: 12, marginTop: 18 }}>
+            {[0, 1, 2].map(slot => (
+              <div
+                key={slot}
+                style={{
+                  border: "1px solid rgba(255,255,255,0.15)",
+                  borderRadius: 10,
+                  padding: 12,
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 10,
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 700 }}>
+                    Save {slot + 1} {slotHasSave[slot] ? "" : "(empty)"}
+                  </div>
+                  <div style={{ opacity: 0.8, fontSize: 14 }}>
+                    {slotHasSave[slot] ? "Progress saved on this device." : "Start a new run here."}
+                  </div>
+                </div>
+
+                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+                  <button onClick={() => startFreshInSlot(slot)}>
+                    New Game
+                  </button>
+
+                  <button
+                    onClick={() => loadSlot(slot)}
+                    disabled={!slotHasSave[slot]}
+                  >
+                    Load
+                  </button>
+
+                  <button
+                    onClick={() => clearSlot(slot)}
+                    disabled={!slotHasSave[slot]}
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
-        ))}
-      </div>
 
-      <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
-        {lines.map((t, idx) => (
-          <p key={idx}>{t}</p>
-        ))}
-      </div>
+          <div style={{ marginTop: 18, opacity: 0.75, fontSize: 13 }}>
+            Saves use localStorage, so they live per browser per device until deleted.
+          </div>
+        </div>
+      )}
 
-      <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
-        {choices.map(c => (
-          <button key={c.index} onClick={() => choose(c.index)}>
-            {c.text}
-          </button>
-        ))}
-      </div>
+      {mode === "game" && (
+        <div>
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 16 }}>
+            <button onClick={backToMenu}>Back to Menu</button>
+            <div style={{ opacity: 0.8, alignSelf: "center" }}>
+              Playing: Save {activeSlot + 1}
+            </div>
+          </div>
+
+          <div style={{ whiteSpace: "pre-wrap", lineHeight: 1.5 }}>
+            {lines.map((t, idx) => (
+              <p key={idx}>{t}</p>
+            ))}
+          </div>
+
+          <div style={{ display: "grid", gap: 10, marginTop: 18 }}>
+            {choices.map(c => (
+              <button key={c.index} onClick={() => choose(c.index)}>
+                {c.text}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
